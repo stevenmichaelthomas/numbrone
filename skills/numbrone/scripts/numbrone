@@ -9,6 +9,7 @@
 #   projects.json          project index: { "<name>": { "path": ..., "summary": ... } }
 #   projects/<name>/       context.md for each project
 #   tasks/<task>.md        brief + status + append-only log, one file per task
+#   notes/<task>.md        what a worker delivered that isn't a change to a project
 #   roles/                 instructions for managers, workers and the dreamer
 #   projects/<name>/lessons.md  what the dreams learned about working in that project
 #   log/<date>.md          the daily work log: outcomes and decisions (details stay in tasks/)
@@ -34,14 +35,19 @@ Setup
   numbrone chief                                 mark the current agent as the chief, then show status
 
 Work
-  numbrone delegate <project> <task> "<brief>"   chief → manager: create a task and hand it over
+  numbrone delegate <project> <task> "<brief>" [kind]
+                                                 chief → manager: create a task and hand it over.
+                                                 kind is one word for the kind of work (code, research,
+                                                 writing, email, ...), so stats and dreams can compare kinds
                                                  (a manager can also use it to create its own tasks)
   numbrone spawn <task>                          manager → worker: worktree + tab + agent for a task
   numbrone report <task> <status> "<note>"       log progress and ping whoever is one level up
                                                  status: working | blocked | review | done
   numbrone status [task]                         overview of all open tasks, or one task's file
   numbrone send-back <task> "<what to fix>"      send work back one level down, and record it
-  numbrone close <task>                          close the worker tab, remove its worktree (keeps the branch)
+  numbrone close <task> <verdict> ["<note>"]     record the user's verdict (accepted | changed | dropped)
+                                                 and, for code, close the worker tab and remove its worktree
+                                                 (keeps the branch). changed and dropped need a note
   numbrone log ["<note>" | <date>]               add a note to today's work log, or print a day's log
 
 Learning
@@ -134,7 +140,7 @@ command_init() {
   local skill_folder home
   skill_folder="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # the skill directory
   mkdir -p "$1"; home="$(cd "$1" && pwd)"
-  mkdir -p "$home"/{bin,roles,tasks,projects,log,knowledge}
+  mkdir -p "$home"/{bin,roles,tasks,notes,projects,log,knowledge}
 
   cp "$skill_folder/scripts/numbrone" "$home/bin/numbrone" && chmod +x "$home/bin/numbrone"
   # Everything below is yours to edit (retros improve it over time), so it is only
@@ -151,6 +157,8 @@ command_init() {
   # Older homes keep their edited CLAUDE.md, so say what dreaming needs from it.
   grep -q "numbrone dream" "$home/CLAUDE.md" ||
     echo "note: to turn on daily dreams, add to the chief's session start in $home/CLAUDE.md: run \`numbrone dream\` every hour with your agent's loop feature"
+  grep -q "verdict" "$home/CLAUDE.md" ||
+    echo "note: $home/CLAUDE.md predates verdicts; have the chief close every task, of any kind, with \`numbrone close <task> <accepted|changed|dropped> \"<note>\"\` and pass a kind to \`numbrone delegate\`"
   grep -q "send-back" "$home/roles/manager.md" ||
     echo "note: $home/roles/manager.md predates send-back; have managers send work back with \`numbrone send-back <task> \"<what to fix>\"\` so rework is recorded"
 }
@@ -203,9 +211,12 @@ command_up() {
   done
 }
 
-lessons_note() { # <project> → ", and <lessons file>" when the dreams have written one
-  local lessons="$NUMBRONE_HOME/projects/$1/lessons.md"
-  [ -f "$lessons" ] && echo ", and $lessons (lessons from past work)"
+lessons_note() { # <project> → ", and <lessons files>" for whichever the dreams have written
+  local file files=""
+  for file in "$NUMBRONE_HOME/lessons.md" "$NUMBRONE_HOME/projects/$1/lessons.md"; do
+    [ -f "$file" ] && files="$files${files:+ and }$file"
+  done
+  [ -n "$files" ] && echo ", and $files (lessons from past work)"
   return 0
 }
 
@@ -219,9 +230,10 @@ command_chief() {
 # ── work ───────────────────────────────────────────────────────────────────
 
 command_delegate() {
-  [ $# -eq 3 ] || die 'usage: numbrone delegate <project> <task> "<brief>"'
+  [ $# -eq 3 ] || [ $# -eq 4 ] || die 'usage: numbrone delegate <project> <task> "<brief>" [kind]'
   load; check_name "$2" 24
-  local project="$1" task="$2" brief="$3" file
+  local project="$1" task="$2" brief="$3" kind="${4:-}" file
+  [ -z "$kind" ] || check_name "$kind" 16
   [ -n "$(project_path "$project")" ] || die "unknown project: $project"
   file="$(task_file "$task")"
   [ -e "$file" ] && die "task '$task' already exists: $file"
@@ -229,6 +241,7 @@ command_delegate() {
   cat > "$file" <<EOF
 # $task
 project: $project
+kind: $kind
 status: queued
 branch:
 start:
@@ -369,10 +382,17 @@ command_send_back() {
 }
 
 command_close() {
-  [ $# -eq 1 ] || die "usage: numbrone close <task>"
+  [ $# -ge 1 ] && [ $# -le 3 ] || die 'usage: numbrone close <task> <accepted|changed|dropped> ["<note>"]'
   load
-  local task="$1" file project path worktree tab
+  local task="$1" verdict="${2:-}" note="${3:-}" file project path worktree tab branch text
   file="$(task_file "$task")"; [ -f "$file" ] || die "no such task: $task"
+  # The verdict is how the dreams learn whether work was any good, whatever kind of work it was.
+  case "$verdict" in
+    accepted) ;;
+    changed|dropped) [ -n "$note" ] || die "say what the user changed, or why it was dropped: numbrone close $task $verdict \"<note>\"" ;;
+    "") echo "numbrone: closing without a verdict; next time use: numbrone close $task <accepted|changed|dropped> [\"<note>\"]" >&2 ;;
+    *) die "verdict must be accepted, changed or dropped" ;;
+  esac
   project="$(field "$file" project)"; path="$(project_path "$project")"; worktree="$(field "$file" worktree)"
 
   # Refuse to throw away uncommitted work.
@@ -384,7 +404,9 @@ command_close() {
   [ -n "$worktree" ] && [ -d "$worktree" ] && git -C "$path" worktree remove "$worktree"
 
   set_field "$file" status closed
-  log_line "$file" "$(my_name)" "closed (branch $(field "$file" branch) kept)"
+  branch="$(field "$file" branch)"
+  text="closed${verdict:+: $verdict}${note:+: $note}"
+  log_line "$file" "$(my_name)" "$text${branch:+ (branch $branch kept)}"
   echo "closed $task"
 }
 
@@ -409,18 +431,21 @@ base_branch() { # <project path>
   return 0
 }
 
-# One task's numbers, tab-separated:
-# task project status to_deliver to_close sent_back questions escalations edited merged
+# One task's numbers, tab-separated, for any kind of work:
+# task project kind status to_deliver to_close sent_back questions escalations verdict edited merged
 # - to_deliver: queued → the first time a manager reported review or done
 # - to_close:   that delivery → closed
 # - questions:  workers' blocked reports (usually the manager answers them)
 # - escalations: managers' blocked reports (these reached the user)
+# - verdict:    the user's verdict at close: accepted, changed, dropped (or - while open)
+# And for work on a branch:
 # - edited:     commits on the branch after its last review report: changes made after hand-off
 # - merged:     whether the branch is in the base branch (squash merges show as "no")
 task_numbers() { # <task file>
   local file="$1" task project status created delivered="" closed="" last_review="" path branch base start
-  local sent_back=0 questions=0 escalations=0 edited="-" merged="-" when who text
+  local sent_back=0 questions=0 escalations=0 edited="-" merged="-" verdict="-" kind when who text
   task="$(basename "$file" .md)"; project="$(field "$file" project)"; status="$(field "$file" status)"
+  kind="$(field "$file" kind)"
   created="$(field "$file" created)"
   while read -r _ day time who text; do
     when="$day $time"
@@ -429,7 +454,8 @@ task_numbers() { # <task file>
       done:*)   [[ -z "$delivered" && "$who" == "[manager-"* ]] && delivered="$when" ;;
       "sent back:"*) sent_back=$(( sent_back + 1 )) ;;
       blocked:*) if [[ "$who" == "[worker-"* ]]; then questions=$(( questions + 1 )); else escalations=$(( escalations + 1 )); fi ;;
-      closed*)  closed="$when" ;;
+      closed*)  closed="$when"
+                [[ "$text" =~ ^closed:\ (accepted|changed|dropped) ]] && verdict="${BASH_REMATCH[1]}" ;;
     esac
   done < <(sed -n '/^## Log/,$p' "$file" | grep '^- ')
 
@@ -448,10 +474,10 @@ task_numbers() { # <task file>
     fi
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$task" "$project" "$status" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$task" "$project" "${kind:--}" "$status" \
     "$([ -n "$delivered" ] && echo $(( $(epoch "$delivered") - $(epoch "$created") )) || echo -)" \
     "$([ -n "$delivered" ] && [ -n "$closed" ] && echo $(( $(epoch "$closed") - $(epoch "$delivered") )) || echo -)" \
-    "$sent_back" "$questions" "$escalations" "$edited" "$merged"
+    "$sent_back" "$questions" "$escalations" "$verdict" "$edited" "$merged"
 }
 
 command_stats() {
@@ -466,21 +492,25 @@ command_stats() {
   done)"
   [ -n "$rows" ] || { echo "no tasks created since $since"; return; }
 
-  printf '%-24s %-16s %-8s %-10s %-9s %-5s %-5s %-4s %-7s %s\n' \
-    TASK PROJECT STATUS DELIVERED CLOSED BACK ASKED ESC EDITED MERGED
-  while IFS=$'\t' read -r task project status to_deliver to_close back asked escalated edited merged; do
-    printf '%-24s %-16s %-8s %-10s %-9s %-5s %-5s %-4s %-7s %s\n' "$task" "$project" "$status" \
+  # EDITED and MERGED only apply to work on a branch; they show "-" for everything else.
+  printf '%-24s %-14s %-10s %-8s %-10s %-9s %-5s %-5s %-4s %-9s %-7s %s\n' \
+    TASK PROJECT KIND STATUS DELIVERED CLOSED BACK ASKED ESC VERDICT EDITED MERGED
+  while IFS=$'\t' read -r task project kind status to_deliver to_close back asked escalated verdict edited merged; do
+    printf '%-24s %-14s %-10s %-8s %-10s %-9s %-5s %-5s %-4s %-9s %-7s %s\n' "$task" "$project" "$kind" "$status" \
       "$([ "$to_deliver" = - ] && echo - || duration "$to_deliver")" \
-      "$([ "$to_close" = - ] && echo - || duration "$to_close")" "$back" "$asked" "$escalated" "$edited" "$merged"
+      "$([ "$to_close" = - ] && echo - || duration "$to_close")" "$back" "$asked" "$escalated" "$verdict" "$edited" "$merged"
   done <<< "$rows"
 
   echo
   echo "$rows" | awk -F'\t' -v since="$since" '
-    { tasks++ }
-    $4 != "-" { delivered++; times[delivered] = $4; if ($6 == 0) first_time++ }
-    { back += $6; asked += $7; escalated += $8 }
-    $9 != "-" && $9 > 0 { edited++ }
-    $10 == "yes" { merged++ }
+    { tasks++; back += $7; asked += $8; escalated += $9; verdicts[$10]++ }
+    $5 != "-" {
+      delivered++; times[delivered] = $5; if ($7 == 0) first_time++
+      if (!($3 in kind_delivered)) kinds[++kind_count] = $3
+      kind_delivered[$3]++; if ($7 == 0) kind_first[$3]++
+    }
+    $11 != "-" && $11 > 0 { edited++ }
+    $12 == "yes" { merged++ }
     END {
       median = "-"
       if (delivered) {
@@ -491,8 +521,16 @@ command_stats() {
       }
       printf "since %s: %d tasks, %d delivered, %d first time (%d%%), median time to deliver %s\n",
         since, tasks, delivered, first_time, delivered ? 100 * first_time / delivered : 0, median
-      printf "send-backs: %d, worker questions: %d, escalations to the user: %d, changed after hand-off: %d, merged: %d\n",
-        back, asked, escalated, edited, merged
+      printf "send-backs: %d, worker questions: %d, escalations to the user: %d\n", back, asked, escalated
+      printf "verdicts: %d accepted, %d changed, %d dropped, %d without one\n",
+        verdicts["accepted"], verdicts["changed"], verdicts["dropped"], verdicts["-"]
+      if (kind_count) {
+        line = "by kind (first time / delivered):"
+        for (i = 1; i <= kind_count; i++)
+          line = line sprintf("%s %s %d/%d", i > 1 ? "," : "", kinds[i] == "-" ? "untagged" : kinds[i], kind_first[kinds[i]], kind_delivered[kinds[i]])
+        print line
+      }
+      if (edited || merged) printf "branches: %d changed after hand-off, %d merged\n", edited, merged
     }'
 }
 

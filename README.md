@@ -3,7 +3,8 @@
 > numbrone is an independent community project built on top of [herdr](https://herdr.dev).
 > It is not made by or affiliated with the herdr team.
 
-**A chief of staff for your coding agents.** You give one agent requests in plain language.
+**A chief of staff for your agents.** You give one agent requests in plain language: code
+changes, research, documents, emails, whatever your projects need.
 It works out which of your projects each request belongs to and hands it to that project's
 manager. The manager runs workers in parallel, each in its own git worktree, and everyone
 reports back up. All of it runs in [herdr](https://herdr.dev), so you can watch any agent at any time.
@@ -24,19 +25,23 @@ We all need a numbrone at work. This is yours.
    └───────┬───────┘          └───────┬───────┘   one per project: herdr workspace numbrone/<project>
       ┌────┴─────────┐                │
       ▼              ▼                ▼
- worker-rate-   worker-fix-     worker-new-       one per code task: herdr tab and git worktree
+ worker-rate-   worker-fix-     worker-new-       one per task: herdr tab and git worktree
  limit          login           navbar                               on branch numbrone/<task>
 
   reports flow back up:  worker ──▶ manager ──▶ chief ──▶ you
 ```
 
-- **Chief**: the agent you talk to. It doesn't write code. It routes and delegates
-  requests, and it tells you what's happening.
+- **Chief**: the agent you talk to. Beyond quick answers, it doesn't do the work itself. It
+  routes and delegates requests, and it tells you what's happening.
 - **Managers**: one per project, living in that project's herdr workspace. A manager answers
-  small things itself (questions, investigations) and spawns workers for code changes. It
-  reviews their work before reporting it as ready.
+  small things itself and spawns a worker for everything else: code, research, writing, emails.
+  It reviews their work before reporting it as ready.
 - **Workers**: one per task, each in its own tab and git worktree, so many tasks run at once
-  without stepping on each other or on your own checkout.
+  without stepping on each other or on your own checkout. Work that isn't a change to the
+  project (findings, drafts) goes in `notes/<task>.md`.
+
+Small things (a quick question, a status check) get answered in the agent's own thread. Everything
+else gets its own tab by default, so you can watch any piece of work.
 
 It's one skill, one bash script, and four Markdown role files. State is plain text files you
 can read and edit.
@@ -216,8 +221,9 @@ stays short enough to read in a minute.
 - 16:01 [manager-demo] add-name: review: Branch numbrone/add-name (c880b98): greet.sh takes an
   optional name and falls back to "world". Tests pass.
 - 16:02 [chief] outcome: add-name (demo): optional name argument, one pass, no rework. Lesson: none
-- 16:20 [chief] decision: user accepted add-name; fix-login goes before new-navbar (launch Friday)
-- 16:21 [chief] add-name: closed (branch numbrone/add-name kept)
+- 16:20 [chief] decision: fix-login goes before new-navbar (launch Friday)
+- 16:21 [chief] add-name: closed: accepted (branch numbrone/add-name kept)
+- 17:05 [chief] q4-update-email: closed: changed: user cut the second paragraph; wanted it under 100 words
 ```
 
 Ask the chief "what got done today?" and it answers by project from this file. To skim
@@ -237,22 +243,28 @@ daily, and a restart never dreams twice in one day.
 
 The dreamer reads:
 
-- **The numbers**, from `numbrone stats`: for each task, how long it took to deliver, how often it
-  was sent back, how many questions workers asked, how often it reached you as a decision,
-  whether the branch was changed after hand-off, and whether it was merged.
+- **The numbers**, from `numbrone stats`: for each task, its kind of work, how long it took to
+  deliver, how often it was sent back, how many questions workers asked, how often it reached you
+  as a decision, and your verdict when it closed. Work on a branch also shows commits made after
+  hand-off and whether it was merged.
 - **The work log and task files**: your feedback, decisions, and every `sent back:` with what was wrong.
-- **What you changed** on a branch after it was handed to you. That's the gap between what the
-  team delivered and what you wanted.
+- **What you changed or rejected** after work was handed to you: the note on each `changed` or
+  `dropped` verdict, and for code, the commits you added. That's the gap between what the team
+  delivered and what you wanted.
 - **The previous dream**, to check whether yesterday's changes moved the numbers.
 
 Every role learns, each from its own file:
 
 | Who | What gets better | How |
 | --- | --- | --- |
-| Workers | Conventions, tests, setup problems that keep coming back | `projects/<name>/lessons.md`, read before every task |
-| Managers | What to catch in review before it reaches you | The same `lessons.md`, read at startup and checked in every review |
+| Workers | Conventions, checking their work, setup problems that keep coming back | `lessons.md` files, read before every task |
+| Managers | What to catch in review, and their own drafts, answers and emails | The same `lessons.md` files, read at startup and checked in every review |
 | Chief | Routing, briefs, what it lets through, what it asks you | Proposals for `CLAUDE.md` and `knowledge/` |
 | Dreamer | Which lessons actually helped | Proposals for `roles/dream.md` |
+
+Lessons live in two places, grouped by kind of work (`## Code`, `## Research`, `## Email`, ...):
+`projects/<name>/lessons.md` for one project, and `lessons.md` in the numbrone home for what holds
+everywhere, such as how you like research written up or the tone of your emails.
 
 The dreamer **applies** lessons about how work gets done (the `lessons.md` files, fixes to a project's
 `context.md`, merging duplicates in **Learned**). It **proposes** everything else, as exact
@@ -262,16 +274,25 @@ brings you the headline and the proposals with its recommendation, and applies t
 Each dream is saved to `log/dreams/<date>.md`. Read one, or run `numbrone stats` yourself:
 
 ```
-TASK                     PROJECT          STATUS   DELIVERED  CLOSED    BACK  ASKED ESC  EDITED  MERGED
-fix-flaky-login          api              closed   1h11m      3h40m     1     1     0    0       yes
-dark-mode-toggle         web              review   42m        -         0     0     0    2       no
+TASK                     PROJECT        KIND       STATUS   DELIVERED  CLOSED    BACK  ASKED ESC  VERDICT   EDITED  MERGED
+fix-flaky-login          api            code       closed   1h11m      3h40m     1     1     0    accepted  0       yes
+churn-research           growth         research   closed   2h05m      1d2h      0     0     1    changed   -       -
+q4-update-email          growth         email      review   12m        -         0     0     0    -         -       -
 
-since 2026-11-09: 2 tasks, 2 delivered, 1 first time (50%), median time to deliver 42m
-send-backs: 1, worker questions: 1, escalations to the user: 0, changed after hand-off: 1, merged: 1
+since 2026-11-09: 3 tasks, 3 delivered, 2 first time (66%), median time to deliver 1h11m
+send-backs: 1, worker questions: 1, escalations to the user: 1
+verdicts: 1 accepted, 1 changed, 0 dropped, 1 without one
+by kind (first time / delivered): code 0/1, research 1/1, email 1/1
+branches: 0 changed after hand-off, 1 merged
 ```
 
-For this to work, rework has to be on the record. So managers and the chief send work back with
-`numbrone send-back <task> "<what to fix>"`, never a bare prompt, and it lands in the task file and the log.
+For this to work, two things go on the record:
+
+- **Rework.** Managers and the chief send work back with `numbrone send-back <task> "<what to fix>"`,
+  never a bare prompt, so it lands in the task file and the log.
+- **Your verdict.** The chief closes every task once you've responded to it, whatever the kind of
+  work: `accepted`, `changed` (with what you changed), or `dropped` (with why). It reads the verdict
+  from what you say, and asks in a few words if it can't tell.
 
 ## Day to day
 
@@ -281,7 +302,7 @@ For this to work, rework has to be on the record. So managers and the chief send
 | See progress | Ask the chief, or `numbrone status` |
 | See one task in full | `numbrone status <task>` (brief, status, full log) |
 | Watch an agent work | Click its workspace and tab in herdr |
-| Accept finished work | Review the `numbrone/<task>` branch, merge it your usual way, then tell the chief to close the task |
+| Accept finished work | Tell the chief, and say what you changed if anything. For code, review the `numbrone/<task>` branch and merge it your usual way first |
 | Add a project | Run `/numbrone` again, or `numbrone add` + write its `context.md` + `numbrone up <name>` |
 | Restart managers | `numbrone up` (after a reboot, for example) |
 | Review how things went | Ask the chief for a retro ("how did this week go?"), or read `log/dreams/` |
@@ -289,8 +310,10 @@ For this to work, rework has to be on the record. So managers and the chief send
 | Send work back | Tell the chief what's wrong (it runs `numbrone send-back`) |
 | Dream now | `numbrone dream --force` |
 
-Nobody merges, pushes, or deploys unless you say so. `numbrone close` refuses to remove a worktree
-that has uncommitted changes, and it always keeps the branch.
+Nobody merges, pushes, deploys, or sends, posts or publishes anything to other people (emails,
+messages, shared documents) unless you say so. Asking for exactly that, such as "send the update
+to the team", counts. `numbrone close` refuses to remove a worktree that has uncommitted changes,
+and it always keeps the branch.
 
 ## How it works
 
@@ -304,7 +327,9 @@ Everything is plain files in the numbrone home folder:
 ├── projects/<name>/
 │   ├── context.md          what the project is, its commands, which requests belong to it
 │   └── lessons.md          what the dreams learned about working here (managers and workers read it)
+├── lessons.md              what the dreams learned that holds across projects, by kind of work
 ├── tasks/<task>.md         one file per task: brief, status, append-only log
+├── notes/<task>.md         what workers deliver that isn't a change to a project: findings, drafts
 ├── log/<date>.md           the daily work log (see above)
 ├── log/dreams/<date>.md    each day's dream: numbers, patterns, what changed, proposals
 ├── knowledge/              what the chief knows about your world, by topic (index.md lists them)
@@ -320,6 +345,7 @@ A task file looks like this:
 ```markdown
 # fix-flaky-login
 project: api
+kind: code
 status: review
 branch: numbrone/fix-flaky-login
 start: 4f1c2e9
@@ -341,13 +367,13 @@ The `numbrone` script is a thin wrapper around the herdr CLI:
 | Command | What it does in herdr / git |
 | --- | --- |
 | `numbrone up [project]` | `herdr workspace create --label numbrone/<project>`, then `herdr agent start manager-<project>` |
-| `numbrone delegate <project> <task> "<brief>"` | Writes `tasks/<task>.md`, then `herdr agent prompt manager-<project>` |
+| `numbrone delegate <project> <task> "<brief>" [kind]` | Writes `tasks/<task>.md` (kind is one word: `code`, `research`, `email`, ...), then `herdr agent prompt manager-<project>` |
 | `numbrone spawn <task>` | `git worktree add <project>/.numbrone/worktrees/<task> -b numbrone/<task>`, `herdr tab create`, `herdr agent start worker-<task>` |
 | `numbrone report <task> <status> "<note>"` | Updates the task file; on `blocked`/`review`/`done` it messages one level up (worker → manager → chief) and shows a herdr notification |
 | `numbrone status [task]` | Reads task files plus live agent states (`herdr agent get`) |
 | `numbrone send-back <task> "<what to fix>"` | Records the rework in the task file and log, then `herdr agent prompt` one level down (manager → worker, chief → manager) |
-| `numbrone close <task>` | `herdr tab close` the worker, `git worktree remove` (keeps the branch) |
-| `numbrone stats [days]` | Per-task numbers from the task files and `git log` / `git merge-base` |
+| `numbrone close <task> <accepted\|changed\|dropped> ["<note>"]` | Records your verdict; for work with a worker, `herdr tab close` it and `git worktree remove` (keeps the branch) |
+| `numbrone stats [days]` | Per-task numbers and verdicts from the task files, plus `git log` / `git merge-base` for branches |
 | `numbrone dream [--force]` | Once a day: `herdr tab create` next to the chief, then `herdr agent start dreamer` |
 | `numbrone chief` | `herdr agent rename <this pane> chief`, so reports can reach it |
 | `numbrone log ["<note>" \| <date>]` | Appends a note to today's work log, or prints a day's log |

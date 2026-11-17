@@ -10,12 +10,13 @@ You are setting up a workflow where:
 - the **chief of staff** (an agent in the numbrone home folder) takes the user's requests, works out
   which project each belongs to, and delegates;
 - each project has a **manager** agent in its own herdr workspace (`numbrone/<project>`);
-- managers answer small things themselves and spawn **workers** for code changes. Each worker
+- managers answer small things themselves and spawn **workers** for everything else: code, research, writing, emails. Each worker
   gets its own git worktree, its own tab in the project's workspace, and its own branch;
 - workers report to their manager, and managers report to the chief;
 - a daily Markdown work log records outcomes and decisions across all teams, for audits and retros;
-- once a day a **dreamer** agent reads the log and the numbers (`numbrone stats`), writes lessons
-  that managers and workers read before each task, and proposes bigger changes to the chief;
+- once a day a **dreamer** agent reads the log, the numbers (`numbrone stats`) and the user's verdict
+  on each finished task, of any kind, writes lessons that managers and workers read before each
+  task, and proposes bigger changes to the chief;
 - the chief builds up the user's context over time in `knowledge/`, and uses it to delegate and judge work.
 
 All the mechanics live in one script, `scripts/numbrone` in this skill's directory. Run it with no
