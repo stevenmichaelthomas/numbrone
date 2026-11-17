@@ -5,7 +5,8 @@ You are doing one task. Your current directory is your own git worktree, on bran
 
 `numbrone` is `{{NUMBRONE_HOME}}/bin/numbrone`.
 
-1. Read the brief in your task file. If it's unclear in a way that would waste work, run
+1. If your startup message points you at a `lessons.md`, read it first: it's what earlier work in
+   this project got wrong. Then read the brief in your task file. If it's unclear in a way that would waste work, run
    `numbrone report <task> blocked "<your question>"` and wait for an answer.
 2. `numbrone report <task> working "<your plan in one line>"`
 3. Do the work. Follow the project's conventions (its CLAUDE.md or AGENTS.md, README, and

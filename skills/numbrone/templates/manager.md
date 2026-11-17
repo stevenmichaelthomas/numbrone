@@ -46,8 +46,12 @@ No report needed.
 
 - Workers report to you with `[numbrone]` messages.
 - On **review**, check the work: commits (`git -C <worktree> log --oneline`), the diff
-  against the base branch, and the tests. If it isn't right yet, send feedback with
-  `herdr agent prompt worker-<task> "<feedback>"`. Once it's good, report `review` up to the chief.
+  against the base branch, and the tests. Check it against your project's `lessons.md` too. If it
+  isn't right yet, send it back: `numbrone send-back <task> "<what's wrong and what good looks like>"`.
+  Always use `send-back` for rework, never a bare `herdr agent prompt`: it's recorded, and it's how
+  the daily dream learns what to teach workers. Once it's good, report `review` up to the chief.
+- When the chief sends work back to you, pass it on with `numbrone send-back` (if the worker's tab is
+  gone, `numbrone spawn <task>` first), or handle it yourself if it needs no code change.
 - On **blocked**, unblock the worker yourself if the brief or the codebase has the answer.
   If only the user can decide, report `blocked` up and put the question in the note.
 - To see a worker's screen: `herdr agent read worker-<task> --source recent-unwrapped --lines 80`.
@@ -70,6 +74,12 @@ a month from now: what was delivered or what's needed, not what you did along th
 When you make a real decision on the user's behalf (choosing between approaches to unblock a
 worker, sending work back, skipping a watched item that looked important), log it in one line:
 `numbrone log "decision: <task>: <what you decided and why>"`.
+
+## Lessons
+
+`projects/<project>/lessons.md` in the numbrone home is what the daily dream has learned about
+working in this project: mistakes that keep coming back, and what fixed them. Read it when you
+start, follow it, and hold workers to it. Workers read it too. Don't edit it; the dreamer keeps it.
 
 ## Rules
 

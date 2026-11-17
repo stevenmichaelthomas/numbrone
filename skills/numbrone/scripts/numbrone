@@ -9,8 +9,10 @@
 #   projects.json          project index: { "<name>": { "path": ..., "summary": ... } }
 #   projects/<name>/       context.md for each project
 #   tasks/<task>.md        brief + status + append-only log, one file per task
-#   roles/                 instructions for managers and workers
+#   roles/                 instructions for managers, workers and the dreamer
+#   projects/<name>/lessons.md  what the dreams learned about working in that project
 #   log/<date>.md          the daily work log: outcomes and decisions (details stay in tasks/)
+#   log/dreams/<date>.md   the daily dream: what the logs say, what changed, what to try next
 #   knowledge/             what the chief has learned about the user's world, by topic
 #   (workers' git worktrees live in each project, under .numbrone/worktrees/)
 #   settings.sh            which agent to run, and with which arguments
@@ -38,8 +40,14 @@ Work
   numbrone report <task> <status> "<note>"       log progress and ping whoever is one level up
                                                  status: working | blocked | review | done
   numbrone status [task]                         overview of all open tasks, or one task's file
+  numbrone send-back <task> "<what to fix>"      send work back one level down, and record it
   numbrone close <task>                          close the worker tab, remove its worktree (keeps the branch)
   numbrone log ["<note>" | <date>]               add a note to today's work log, or print a day's log
+
+Learning
+  numbrone stats [days]                          per-task numbers for the last N days (default 7)
+  numbrone dream [--force]                       start the daily dream, unless today's already ran
+  numbrone dream done "<summary>"                the dreamer reports that it has finished
 EOF
 }
 
@@ -57,10 +65,20 @@ check_name() { # <value> <maximum length>
 load() {
   [ -f "$NUMBRONE_HOME/projects.json" ] || die "no numbrone home found at $NUMBRONE_HOME (run: numbrone init <folder>)"
   command -v jq >/dev/null || die "jq is required"
-  AGENT_KIND=claude AGENT_ARGUMENTS="" BASE_BRANCH="" PING_CHIEF=1
+  AGENT_KIND=claude AGENT_ARGUMENTS="" BASE_BRANCH="" PING_CHIEF=1 DREAM_HOUR=3
   # shellcheck source=/dev/null
   [ -f "$NUMBRONE_HOME/settings.sh" ] && . "$NUMBRONE_HOME/settings.sh"
   return 0
+}
+
+# Dates in task files are "YYYY-MM-DD HH:MM". BSD date (macOS) first, then GNU date (Linux).
+epoch()    { date -j -f '%Y-%m-%d %H:%M:%S' "$1:00" +%s 2>/dev/null || date -d "$1" +%s; }
+days_ago() { date -v-"$1"d +%F 2>/dev/null || date -d "$1 days ago" +%F; }
+duration() { # <seconds> → 45m, 3h10m, 2d4h
+  local minutes=$(( $1 / 60 ))
+  if   [ "$minutes" -lt 60 ];   then echo "${minutes}m"
+  elif [ "$minutes" -lt 1440 ]; then printf '%dh%02dm\n' $(( minutes / 60 )) $(( minutes % 60 ))
+  else echo "$(( minutes / 1440 ))d$(( minutes % 1440 / 60 ))h"; fi
 }
 
 project_path() { jq -r --arg name "$1" '.[$name].path // empty' "$NUMBRONE_HOME/projects.json"; }
@@ -121,14 +139,20 @@ command_init() {
   cp "$skill_folder/scripts/numbrone" "$home/bin/numbrone" && chmod +x "$home/bin/numbrone"
   # Everything below is yours to edit (retros improve it over time), so it is only
   # written the first time. Delete a file and re-run init to get a fresh copy.
-  for file in roles/manager.md roles/worker.md CLAUDE.md; do
+  for file in roles/manager.md roles/worker.md roles/dream.md CLAUDE.md; do
     [ -f "$home/$file" ] || sed "s|{{NUMBRONE_HOME}}|$home|g" "$skill_folder/templates/$(basename "$file")" > "$home/$file"
   done
   [ -e "$home/AGENTS.md" ] || ln -s CLAUDE.md "$home/AGENTS.md"
   [ -f "$home/settings.sh" ] || cp "$skill_folder/templates/settings.sh" "$home/settings.sh"
   [ -f "$home/projects.json" ] || echo '{}' > "$home/projects.json"
   [ -f "$home/knowledge/index.md" ] || cp "$skill_folder/templates/knowledge-index.md" "$home/knowledge/index.md"
+  mkdir -p "$home/log/dreams"
   echo "numbrone home ready at $home"
+  # Older homes keep their edited CLAUDE.md, so say what dreaming needs from it.
+  grep -q "numbrone dream" "$home/CLAUDE.md" ||
+    echo "note: to turn on daily dreams, add to the chief's session start in $home/CLAUDE.md: run \`numbrone dream\` every hour with your agent's loop feature"
+  grep -q "send-back" "$home/roles/manager.md" ||
+    echo "note: $home/roles/manager.md predates send-back; have managers send work back with \`numbrone send-back <task> \"<what to fix>\"\` so rework is recorded"
 }
 
 command_add() {
@@ -174,9 +198,15 @@ command_up() {
       pane="$(herdr tab create --workspace "$workspace" --cwd "$path" --label manager --no-focus | jq -r '.result.root_pane.pane_id')"
     fi
     start_agent "manager-$name" "$pane" \
-      "You are the manager for project '$name'. Read $NUMBRONE_HOME/roles/manager.md and $NUMBRONE_HOME/projects/$name/context.md, start any watches listed there, then reply 'ready'."
+      "You are the manager for project '$name'. Read $NUMBRONE_HOME/roles/manager.md and $NUMBRONE_HOME/projects/$name/context.md$(lessons_note "$name"), start any watches listed there, then reply 'ready'."
     echo "$name: started manager-$name"
   done
+}
+
+lessons_note() { # <project> → ", and <lessons file>" when the dreams have written one
+  local lessons="$NUMBRONE_HOME/projects/$1/lessons.md"
+  [ -f "$lessons" ] && echo ", and $lessons (lessons from past work)"
+  return 0
 }
 
 command_chief() {
@@ -201,6 +231,7 @@ command_delegate() {
 project: $project
 status: queued
 branch:
+start:
 worktree:
 created: $(now)
 
@@ -248,12 +279,13 @@ command_spawn() {
 
   # 3. A worker agent that reads its brief. The task file is updated only once it started.
   if ! (start_agent "worker-$task" "$pane" \
-      "You are worker-$task. Read $NUMBRONE_HOME/roles/worker.md, then your brief at $file, and start."); then
+      "You are worker-$task. Read $NUMBRONE_HOME/roles/worker.md$(lessons_note "$project"), then your brief at $file, and start."); then
     herdr tab close "$(herdr pane get "$pane" | jq -r '.result.pane.tab_id')" >/dev/null 2>&1 || true
     exit 1
   fi
   set_field "$file" status working
   set_field "$file" branch "$branch"
+  set_field "$file" start "$(git -C "$path" rev-parse "$branch")"   # what the work started from, for stats
   set_field "$file" worktree "$worktree"
   task_log "$file" "$(my_name)" "spawned worker-$task on $branch"
   echo "spawned worker-$task in $worktree"
@@ -309,6 +341,33 @@ command_status() {
   echo
 }
 
+# Rework is the best signal there is about how well work goes, so it never travels as a bare
+# herdr prompt: it's recorded in the task file and the work log, where stats and dreams find it.
+command_send_back() {
+  [ $# -eq 2 ] || die 'usage: numbrone send-back <task> "<what to fix>"'
+  load
+  local task="$1" note="$2" file who project to
+  file="$(task_file "$task")"; [ -f "$file" ] || die "no such task: $task"
+  project="$(field "$file" project)"; who="$(my_name)"
+  case "$who" in
+    worker-*)  die "workers report up with numbrone report; send-back goes down" ;;
+    manager-*) to="worker-$task" ;;
+    *)         to="manager-$project" ;;   # the chief, or the user from a shell
+  esac
+
+  set_field "$file" status working
+  log_line "$file" "$who" "sent back: $note"
+  if [ "$to" = "worker-$task" ]; then
+    herdr agent prompt "$to" "[numbrone] $task sent back by $who: $note. Fix it, commit, and report review again." >/dev/null 2>&1 ||
+      die "recorded, but $to isn't running. Start it again with: numbrone spawn $task"
+  else
+    [ "$(agent_state "$to")" != "-" ] || command_up "$project"
+    herdr agent prompt "$to" "[numbrone] $task sent back by $who: $note. Pass it to the worker (numbrone send-back $task \"...\"; numbrone spawn $task if its tab is gone), or handle it yourself." >/dev/null 2>&1 ||
+      die "recorded, but $to did not accept the message. See: herdr agent read $to"
+  fi
+  echo "sent $task back to $to"
+}
+
 command_close() {
   [ $# -eq 1 ] || die "usage: numbrone close <task>"
   load
@@ -337,11 +396,177 @@ command_log() {
   else journal "$(my_name)" "$*"; fi
 }
 
+# ── learning ───────────────────────────────────────────────────────────────
+
+# The branch work is merged into: BASE_BRANCH, else origin's default branch, else main or master.
+base_branch() { # <project path>
+  if [ -n "$BASE_BRANCH" ]; then echo "$BASE_BRANCH"; return; fi
+  git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null && return
+  local name
+  for name in main master; do
+    git -C "$1" show-ref --verify --quiet "refs/heads/$name" && { echo "$name"; return; }
+  done
+  return 0
+}
+
+# One task's numbers, tab-separated:
+# task project status to_deliver to_close sent_back questions escalations edited merged
+# - to_deliver: queued → the first time a manager reported review or done
+# - to_close:   that delivery → closed
+# - questions:  workers' blocked reports (usually the manager answers them)
+# - escalations: managers' blocked reports (these reached the user)
+# - edited:     commits on the branch after its last review report: changes made after hand-off
+# - merged:     whether the branch is in the base branch (squash merges show as "no")
+task_numbers() { # <task file>
+  local file="$1" task project status created delivered="" closed="" last_review="" path branch base start
+  local sent_back=0 questions=0 escalations=0 edited="-" merged="-" when who text
+  task="$(basename "$file" .md)"; project="$(field "$file" project)"; status="$(field "$file" status)"
+  created="$(field "$file" created)"
+  while read -r _ day time who text; do
+    when="$day $time"
+    case "$text" in
+      review:*) last_review="$when"; [[ -z "$delivered" && "$who" == "[manager-"* ]] && delivered="$when" ;;
+      done:*)   [[ -z "$delivered" && "$who" == "[manager-"* ]] && delivered="$when" ;;
+      "sent back:"*) sent_back=$(( sent_back + 1 )) ;;
+      blocked:*) if [[ "$who" == "[worker-"* ]]; then questions=$(( questions + 1 )); else escalations=$(( escalations + 1 )); fi ;;
+      closed*)  closed="$when" ;;
+    esac
+  done < <(sed -n '/^## Log/,$p' "$file" | grep '^- ')
+
+  path="$(project_path "$project")"; branch="$(field "$file" branch)"
+  if [ -n "$path" ] && [ -n "$branch" ] && git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then
+    base="$(base_branch "$path")"
+    # Only the task's own commits: from where it started (older task files: where it left the base).
+    start="$(field "$file" start)"
+    [ -n "$start" ] || start="$([ -n "$base" ] && git -C "$path" merge-base "$base" "$branch" 2>/dev/null)" || start=""
+    if [ -n "$last_review" ]; then
+      edited="$(git -C "$path" log --format=%ct "${start:+$start..}$branch" 2>/dev/null |
+        awk -v after="$(( $(epoch "$last_review") + 60 ))" '$1 >= after { n++ } END { print n + 0 }')"
+    fi
+    if [ -n "$base" ]; then
+      if git -C "$path" merge-base --is-ancestor "$branch" "$base" 2>/dev/null; then merged=yes; else merged=no; fi
+    fi
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$task" "$project" "$status" \
+    "$([ -n "$delivered" ] && echo $(( $(epoch "$delivered") - $(epoch "$created") )) || echo -)" \
+    "$([ -n "$delivered" ] && [ -n "$closed" ] && echo $(( $(epoch "$closed") - $(epoch "$delivered") )) || echo -)" \
+    "$sent_back" "$questions" "$escalations" "$edited" "$merged"
+}
+
+command_stats() {
+  load
+  local days="${1:-7}" since file rows
+  [[ "$days" =~ ^[0-9]+$ ]] || die "usage: numbrone stats [days]"
+  since="$(days_ago "$days")"
+  rows="$(for file in "$NUMBRONE_HOME"/tasks/*.md; do
+    [ -e "$file" ] || continue
+    [[ "$(field "$file" created)" < "$since" ]] && continue
+    task_numbers "$file"
+  done)"
+  [ -n "$rows" ] || { echo "no tasks created since $since"; return; }
+
+  printf '%-24s %-16s %-8s %-10s %-9s %-5s %-5s %-4s %-7s %s\n' \
+    TASK PROJECT STATUS DELIVERED CLOSED BACK ASKED ESC EDITED MERGED
+  while IFS=$'\t' read -r task project status to_deliver to_close back asked escalated edited merged; do
+    printf '%-24s %-16s %-8s %-10s %-9s %-5s %-5s %-4s %-7s %s\n' "$task" "$project" "$status" \
+      "$([ "$to_deliver" = - ] && echo - || duration "$to_deliver")" \
+      "$([ "$to_close" = - ] && echo - || duration "$to_close")" "$back" "$asked" "$escalated" "$edited" "$merged"
+  done <<< "$rows"
+
+  echo
+  echo "$rows" | awk -F'\t' -v since="$since" '
+    { tasks++ }
+    $4 != "-" { delivered++; times[delivered] = $4; if ($6 == 0) first_time++ }
+    { back += $6; asked += $7; escalated += $8 }
+    $9 != "-" && $9 > 0 { edited++ }
+    $10 == "yes" { merged++ }
+    END {
+      median = "-"
+      if (delivered) {
+        for (i = 1; i <= delivered; i++) for (j = i + 1; j <= delivered; j++)
+          if (times[j] < times[i]) { t = times[i]; times[i] = times[j]; times[j] = t }
+        m = int(times[int((delivered + 1) / 2)] / 60)
+        median = m < 60 ? m "m" : sprintf("%dh%02dm", m / 60, m % 60)
+      }
+      printf "since %s: %d tasks, %d delivered, %d first time (%d%%), median time to deliver %s\n",
+        since, tasks, delivered, first_time, delivered ? 100 * first_time / delivered : 0, median
+      printf "send-backs: %d, worker questions: %d, escalations to the user: %d, changed after hand-off: %d, merged: %d\n",
+        back, asked, escalated, edited, merged
+    }'
+}
+
+# The dream: once a day, a short-lived "dreamer" agent reads what happened (the work log, the
+# task files, the numbers), writes log/dreams/<date>.md, keeps the lessons files up to date, and
+# brings bigger changes to the chief as proposals. Safe to call as often as you like: it dreams
+# at most once per day, not before DREAM_HOUR, and only when something happened since last time.
+command_dream() {
+  load
+  if [ "${1:-}" = done ]; then
+    [ $# -eq 2 ] || die 'usage: numbrone dream done "<summary>"'
+    dream_done "$2"; return
+  fi
+  [ $# -eq 0 ] || [ "$1" = --force ] || die 'usage: numbrone dream [--force]'
+
+  local dreams="$NUMBRONE_HOME/log/dreams" marker state previous workspace pane
+  marker="$dreams/.last"; mkdir -p "$dreams"
+  state="$(agent_state dreamer)"
+  case "$state" in working|blocked) echo "a dream is already running (herdr tab 'dream')"; return ;; esac
+
+  if [ "${1:-}" != --force ]; then
+    [ "$(cat "$marker" 2>/dev/null)" != "$(date +%F)" ] || { echo "already dreamed today"; return; }
+    [ "$((10#$(date +%H)))" -ge "$DREAM_HOUR" ] || { echo "not dreaming before $DREAM_HOUR:00"; return; }
+    if [ -f "$marker" ]; then
+      [ -n "$(find "$NUMBRONE_HOME/log" "$NUMBRONE_HOME/tasks" -maxdepth 1 -name '*.md' -newer "$marker" | head -n1)" ] ||
+        { echo "nothing new since the last dream"; return; }
+    else
+      [ -n "$(find "$NUMBRONE_HOME/log" -maxdepth 1 -name '*.md' | head -n1)" ] || { echo "nothing to dream about yet"; return; }
+    fi
+  fi
+
+  # The last dreamer's tab stays open so you can read it. Close it now that it's finished.
+  if [ "$state" != "-" ]; then
+    herdr tab close "$(herdr agent get dreamer | jq -r '.result.agent.tab_id')" >/dev/null 2>&1 || true
+  fi
+
+  # Dream next to the chief, or next to whoever asked, or in a workspace of its own.
+  workspace="$(herdr agent get chief 2>/dev/null | jq -r '.result.agent.workspace_id // empty')" || workspace=""
+  if [ -z "$workspace" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+    workspace="$(herdr pane get "$HERDR_PANE_ID" | jq -r '.result.pane.workspace_id // empty')"
+  fi
+  if [ -n "$workspace" ]; then
+    pane="$(herdr tab create --workspace "$workspace" --cwd "$NUMBRONE_HOME" --label dream --no-focus | jq -r '.result.root_pane.pane_id')"
+  else
+    pane="$(herdr workspace create --cwd "$NUMBRONE_HOME" --label numbrone --no-focus | jq -r '.result.root_pane.pane_id')"
+  fi
+
+  previous="$(find "$dreams" -name '*.md' | sort | tail -n1)"
+  if ! (start_agent dreamer "$pane" \
+      "You are the dreamer. Today is $(date +%F). The previous dream is ${previous:-none (this is the first)}. Read $NUMBRONE_HOME/roles/dream.md and follow it."); then
+    herdr tab close "$(herdr pane get "$pane" | jq -r '.result.pane.tab_id')" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  date +%F > "$marker"
+  echo "dreaming in herdr tab 'dream'; it writes $dreams/$(date +%F).md"
+}
+
+dream_done() { # <summary>
+  local file="log/dreams/$(date +%F).md"
+  journal "$(my_name)" "dream: $1 ($file)"
+  date +%F > "$NUMBRONE_HOME/log/dreams/.last"   # after the journal line, so it doesn't count as news
+  if [ "$PING_CHIEF" = 1 ]; then
+    herdr agent prompt chief "[numbrone] dream ready: $NUMBRONE_HOME/$file. $1" >/dev/null 2>&1 || true
+  fi
+  herdr notification show "Dream ready" --body "$1" --sound done >/dev/null 2>&1 || true
+  echo "dream recorded"
+}
+
 # ── dispatch ───────────────────────────────────────────────────────────────
 
 command="${1:-help}"; shift || true
 case "$command" in
-  init|add|remove|projects|up|chief|delegate|spawn|report|status|close|log) "command_$command" "$@" ;;
+  init|add|remove|projects|up|chief|delegate|spawn|report|status|close|log|stats|dream) "command_$command" "$@" ;;
+  send-back) command_send_back "$@" ;;
   help|-h|--help) usage ;;
   *) usage; exit 2 ;;
 esac
