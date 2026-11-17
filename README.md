@@ -38,7 +38,7 @@ We all need a numbrone at work. This is yours.
 - **Workers**: one per task, each in its own tab and git worktree, so many tasks run at once
   without stepping on each other or on your own checkout.
 
-It's one skill, one bash script, and three Markdown role files. State is plain text files you
+It's one skill, one bash script, and four Markdown role files. State is plain text files you
 can read and edit.
 
 ## Requirements
@@ -224,9 +224,54 @@ Ask the chief "what got done today?" and it answers by project from this file. T
 outcomes across days yourself: `grep -h "outcome:" ~/.numbrone/log/*.md`.
 
 Entries are only ever appended, so the log is an audit trail you can trust. It's also how the
-setup gets better over time. Ask the chief for a retro and it reads the log, tells you where work
-stalled or was redone and how often, and proposes changes to its own instructions, the role files, or a
-project's context. It only makes them once you agree.
+setup gets better over time: see [Dreams](#dreams). You can also ask the chief for a retro any time
+("how did this week go?"). It reads the log, tells you where work stalled or was redone and how
+often, and proposes changes. It only makes them once you agree.
+
+## Dreams
+
+Once a day, the team looks back at its own work and gets better at it. The chief checks every
+hour (`numbrone dream`, on its loop), and the first check after 3am on a day with new activity starts a
+short-lived **dreamer** agent in a tab next to the chief. A chief that runs for weeks still dreams
+daily, and a restart never dreams twice in one day.
+
+The dreamer reads:
+
+- **The numbers**, from `numbrone stats`: for each task, how long it took to deliver, how often it
+  was sent back, how many questions workers asked, how often it reached you as a decision,
+  whether the branch was changed after hand-off, and whether it was merged.
+- **The work log and task files**: your feedback, decisions, and every `sent back:` with what was wrong.
+- **What you changed** on a branch after it was handed to you. That's the gap between what the
+  team delivered and what you wanted.
+- **The previous dream**, to check whether yesterday's changes moved the numbers.
+
+Every role learns, each from its own file:
+
+| Who | What gets better | How |
+| --- | --- | --- |
+| Workers | Conventions, tests, setup problems that keep coming back | `projects/<name>/lessons.md`, read before every task |
+| Managers | What to catch in review before it reaches you | The same `lessons.md`, read at startup and checked in every review |
+| Chief | Routing, briefs, what it lets through, what it asks you | Proposals for `CLAUDE.md` and `knowledge/` |
+| Dreamer | Which lessons actually helped | Proposals for `roles/dream.md` |
+
+The dreamer **applies** lessons about how work gets done (the `lessons.md` files, fixes to a project's
+`context.md`, merging duplicates in **Learned**). It **proposes** everything else, as exact
+edits: changes to the chief's instructions, the role files, settings, or knowledge. The chief
+brings you the headline and the proposals with its recommendation, and applies the ones you accept.
+
+Each dream is saved to `log/dreams/<date>.md`. Read one, or run `numbrone stats` yourself:
+
+```
+TASK                     PROJECT          STATUS   DELIVERED  CLOSED    BACK  ASKED ESC  EDITED  MERGED
+fix-flaky-login          api              closed   1h11m      3h40m     1     1     0    0       yes
+dark-mode-toggle         web              review   42m        -         0     0     0    2       no
+
+since 2026-11-09: 2 tasks, 2 delivered, 1 first time (50%), median time to deliver 42m
+send-backs: 1, worker questions: 1, escalations to the user: 0, changed after hand-off: 1, merged: 1
+```
+
+For this to work, rework has to be on the record. So managers and the chief send work back with
+`numbrone send-back <task> "<what to fix>"`, never a bare prompt, and it lands in the task file and the log.
 
 ## Day to day
 
@@ -239,7 +284,10 @@ project's context. It only makes them once you agree.
 | Accept finished work | Review the `numbrone/<task>` branch, merge it your usual way, then tell the chief to close the task |
 | Add a project | Run `/numbrone` again, or `numbrone add` + write its `context.md` + `numbrone up <name>` |
 | Restart managers | `numbrone up` (after a reboot, for example) |
-| Review how things went | Ask the chief for a retro ("how did this week go?") |
+| Review how things went | Ask the chief for a retro ("how did this week go?"), or read `log/dreams/` |
+| See the numbers | `numbrone stats [days]` |
+| Send work back | Tell the chief what's wrong (it runs `numbrone send-back`) |
+| Dream now | `numbrone dream --force` |
 
 Nobody merges, pushes, or deploys unless you say so. `numbrone close` refuses to remove a worktree
 that has uncommitted changes, and it always keeps the branch.
@@ -254,13 +302,16 @@ Everything is plain files in the numbrone home folder:
 ├── settings.sh           which agent to run, with which arguments
 ├── projects.json           project index: name → path + one-line summary
 ├── projects/<name>/
-│   └── context.md          what the project is, its commands, which requests belong to it
+│   ├── context.md          what the project is, its commands, which requests belong to it
+│   └── lessons.md          what the dreams learned about working here (managers and workers read it)
 ├── tasks/<task>.md         one file per task: brief, status, append-only log
-├── log/<date>.md           the daily work log (see below)
+├── log/<date>.md           the daily work log (see above)
+├── log/dreams/<date>.md    each day's dream: numbers, patterns, what changed, proposals
 ├── knowledge/              what the chief knows about your world, by topic (index.md lists them)
 ├── roles/
 │   ├── manager.md          instructions every manager reads at startup
-│   └── worker.md           instructions every worker reads at startup
+│   ├── worker.md           instructions every worker reads at startup
+│   └── dream.md            instructions for the daily dreamer
 └── bin/numbrone            the script everyone uses
 ```
 
@@ -271,6 +322,7 @@ A task file looks like this:
 project: api
 status: review
 branch: numbrone/fix-flaky-login
+start: 4f1c2e9
 worktree: /code/api/.numbrone/worktrees/fix-flaky-login
 created: 2026-11-08 15:58
 
@@ -293,7 +345,10 @@ The `numbrone` script is a thin wrapper around the herdr CLI:
 | `numbrone spawn <task>` | `git worktree add <project>/.numbrone/worktrees/<task> -b numbrone/<task>`, `herdr tab create`, `herdr agent start worker-<task>` |
 | `numbrone report <task> <status> "<note>"` | Updates the task file; on `blocked`/`review`/`done` it messages one level up (worker → manager → chief) and shows a herdr notification |
 | `numbrone status [task]` | Reads task files plus live agent states (`herdr agent get`) |
+| `numbrone send-back <task> "<what to fix>"` | Records the rework in the task file and log, then `herdr agent prompt` one level down (manager → worker, chief → manager) |
 | `numbrone close <task>` | `herdr tab close` the worker, `git worktree remove` (keeps the branch) |
+| `numbrone stats [days]` | Per-task numbers from the task files and `git log` / `git merge-base` |
+| `numbrone dream [--force]` | Once a day: `herdr tab create` next to the chief, then `herdr agent start dreamer` |
 | `numbrone chief` | `herdr agent rename <this pane> chief`, so reports can reach it |
 | `numbrone log ["<note>" \| <date>]` | Appends a note to today's work log, or prints a day's log |
 
@@ -312,6 +367,7 @@ AGENT_KIND=claude       # any `herdr agent start --kind` value
 AGENT_ARGUMENTS=""      # extra arguments for the agent
 BASE_BRANCH=""          # branch new worktrees start from ("" = project's current HEAD)
 PING_CHIEF=1            # 0 = don't type reports into the chief; just log and notify
+DREAM_HOUR=3            # the daily dream runs at the first hourly check after this hour
 ```
 
 **Permission prompts.** Workers stop at every permission prompt and show as `blocked` in herdr
@@ -340,7 +396,8 @@ can install the skill for that agent with `npx skills add … -a <agent>`, or ru
 - **Change how roles behave**: edit `~/.numbrone/roles/manager.md` or `worker.md`.
 - **Upgrade**: pull the repository and run `numbrone init ~/.numbrone` again. It updates `bin/numbrone`
   and never overwrites files you may have edited (`CLAUDE.md`, `roles/`, `settings.sh`,
-  `projects.json`). To take a newer template, delete that file and run `init` again.
+  `projects.json`). To take a newer template, delete that file and run `init` again. If your
+  `CLAUDE.md` or `roles/manager.md` predates dreams, `init` tells you the line to add.
 - **Change how the chief behaves**: edit `~/.numbrone/CLAUDE.md` directly.
 - **Better routing**: improve the "Route here" and "Not here" sections in each project's `context.md`.
 

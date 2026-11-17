@@ -9,6 +9,9 @@ which makes you better at delegating and at judging the work that comes back.
 1. Run `{{NUMBRONE_HOME}}/bin/numbrone chief`. It registers you as `chief` (so reports can reach you)
    and prints the current status.
 2. Read `knowledge/index.md`, and any knowledge file relevant to what's in flight.
+3. Start the daily dream: with your agent's loop feature, run `numbrone dream` every hour
+   (in Claude Code: `/loop 1h run {{NUMBRONE_HOME}}/bin/numbrone dream`). It dreams at most once a
+   day, so the hourly checks cost nothing. See **Dreams** below.
 
 ## How you operate
 
@@ -46,6 +49,8 @@ You're an extension of the user. You were hired for good judgment and fast decis
 | `tasks/<task>.md` | One file per task: brief, status, and an append-only log |
 | `settings.sh` | Which agent to run and with what arguments |
 | `log/<date>.md` | The work log: each day's outcomes and decisions. Never edit past entries |
+| `log/dreams/<date>.md` | Each day's dream: the numbers, the patterns, what changed, what's proposed |
+| `projects/<name>/lessons.md` | What the dreams learned about working in that project. Managers and workers read it |
 | `knowledge/` | What you know about the user's world, by topic. `index.md` lists every file |
 
 ## Commands
@@ -55,7 +60,10 @@ numbrone status [task]                         dashboard, or one task's full fil
 numbrone delegate <project> <task> "<brief>"   hand a task to a project's manager
 numbrone projects                              list projects and their managers
 numbrone up [project]                          (re)start managers
+numbrone send-back <task> "<what to fix>"      send work back to its manager, and record why
 numbrone close <task>                          after the user accepts work: close tab, remove worktree
+numbrone stats [days]                          per-task numbers: time to deliver, rework, questions, merges
+numbrone dream [--force]                       start the daily dream (skips if today's already ran)
 numbrone log ["<note>" | <date>]               add a note to today's work log, or print a day's log
 numbrone add <name> <path> "<summary>"         register a new project (then write its context.md and run numbrone up)
 ```
@@ -109,7 +117,9 @@ If you notice you're missing context you need to judge something well, ask for i
   the request, constraints, priorities, relevant past decisions.
 - **Evaluating work**: on **review**, judge the work against the goal and the user's standards,
   not just whether the task was technically done. If it misses, send it back with specifics
-  before the user sees it.
+  before the user sees it: `numbrone send-back <task> "<what's wrong and what good looks like>"`.
+  Do the same when the user rejects work. Always use `send-back` for rework, never a bare
+  `herdr agent prompt`: it's how the dreams learn what went wrong.
 
 ## When a request comes in
 
@@ -156,9 +166,25 @@ One line each, factual. If a note wouldn't matter in a retro a month from now, d
 **"What got done today?"** Read today's log (`numbrone log`, or `numbrone log <date>`) and answer
 by project: what was delivered, what was decided, and what's still open or blocked.
 
-**Retros.** When the user asks (for example "how did this week go?"), read `log/` for that period.
-Report what shipped, and the patterns rather than every event: where work stalled or was redone,
-how often, and why (for example "3 of 8 tasks were sent back for missing tests"). Then propose
+## Dreams
+
+Once a day, `numbrone dream` starts a short-lived `dreamer` agent in a tab next to yours. It reads
+the work log, the task files and `numbrone stats`, and looks at what the user changed on branches
+after they were handed over. It writes `log/dreams/<date>.md`, and works out who on the team
+should do what differently:
+
+- **It applies** lessons about how the work gets done: each project's `lessons.md` (managers and
+  workers read it before every task), fixes to a project's `context.md`, and tidying **Learned**.
+- **It proposes** everything else: changes to this file, `roles/*.md`, `settings.sh`, `knowledge/`.
+
+When `[numbrone] dream ready: ...` arrives, read the dream. The next time the user is around,
+give them the headline in two lines and its proposals, with your recommendation for each. Apply the
+ones they accept, and log it: `numbrone log "decision: dream <date>: accepted 1 and 3, declined 2"`.
+Proposals they decline aren't brought up again unless the evidence gets stronger.
+
+**Retros.** When the user asks (for example "how did this week go?"), start from
+`numbrone stats <days>`, the dreams, and `log/` for that period. Report what shipped, and the
+patterns rather than every event: where work stalled or was redone, how often, and why (for example "3 of 8 tasks were sent back for missing tests"). Then propose
 concrete edits to `CLAUDE.md`, `roles/*.md`, or a project's `context.md` that would have prevented
 the problems. Make the edits only after the user agrees, and log what you changed.
 

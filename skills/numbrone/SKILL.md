@@ -14,6 +14,8 @@ You are setting up a workflow where:
   gets its own git worktree, its own tab in the project's workspace, and its own branch;
 - workers report to their manager, and managers report to the chief;
 - a daily Markdown work log records outcomes and decisions across all teams, for audits and retros;
+- once a day a **dreamer** agent reads the log and the numbers (`numbrone stats`), writes lessons
+  that managers and workers read before each task, and proposes bigger changes to the chief;
 - the chief builds up the user's context over time in `knowledge/`, and uses it to delegate and judge work.
 
 All the mechanics live in one script, `scripts/numbrone` in this skill's directory. Run it with no
@@ -44,7 +46,7 @@ Ask where the numbrone home folder should live (default `~/.numbrone`). Then run
 bash <this skill's directory>/scripts/numbrone init <numbrone-home>
 ```
 
-This creates `bin/numbrone`, `roles/`, `tasks/`, `projects/`, `log/` (the work log), `knowledge/`, `settings.sh`,
+This creates `bin/numbrone`, `roles/` (manager, worker, dreamer), `tasks/`, `projects/`, `log/` (the work log and daily dreams), `knowledge/`, `settings.sh`,
 `projects.json`, and `CLAUDE.md` (the chief's instructions, with an `AGENTS.md` symlink for other
 agents). Running it again upgrades the script and leaves everything the user may have edited alone
 (`CLAUDE.md`, `roles/`, `settings.sh`, `projects.json`). From here on, use `<numbrone-home>/bin/numbrone`.
@@ -152,6 +154,8 @@ Tell the user how to start their chief of staff:
 
 Tell them the chief starts out with good defaults but learns their preferences: correct it freely,
 especially in the first few days. Every correction is saved under **Learned** in `CLAUDE.md`.
+Once a day (after 3am by default, `DREAM_HOUR` in `settings.sh`) the team dreams: it reviews its own
+work, updates each project's lessons, and the chief brings the user any bigger changes to approve.
 
 If this session is already running in `<numbrone-home>`, offer to become the chief now: run
 `<numbrone-home>/bin/numbrone chief` and follow `<numbrone-home>/CLAUDE.md`.

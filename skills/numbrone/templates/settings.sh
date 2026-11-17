@@ -16,3 +16,7 @@ BASE_BRANCH=""
 # 1 = managers' blocked/review/done reports are typed into the chief's session.
 # 0 = only log them and show a herdr notification (check with `numbrone status`).
 PING_CHIEF=1
+
+# The daily dream (numbrone dream) runs at most once a day, and not before this hour (0-23).
+# The chief checks every hour, so the dream lands at the first check after this hour.
+DREAM_HOUR=3
